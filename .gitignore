@@ -1,0 +1,51 @@
+# ---------------------------------------------------------------
+#  Personal data. NONE of this belongs in a public repository.
+# ---------------------------------------------------------------
+
+# Your CV.
+Resumes/*
+!Resumes/.gitkeep
+!Resumes/README.md
+
+# Generated from your CV - contains your name, contact details and
+# employment history.
+state/profile.md
+state/resume.hash
+
+# Run state: which jobs you have seen, been notified about, and when.
+state/last_run.json
+state/seen_jobs.json
+state/notified.json
+state/pending_notify.json
+state/run-result.json
+state/*.corrupt-*
+state/*.tmp
+
+# Shortlists name real companies alongside an assessment of your fit.
+shortlists/*
+!shortlists/.gitkeep
+
+# Logs can contain job titles, company names and error text.
+logs/*
+!logs/.gitkeep
+
+# ---------------------------------------------------------------
+#  Local tooling
+# ---------------------------------------------------------------
+.claude/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ---------------------------------------------------------------
+#  Secrets
+#  The auth token belongs in the CLAUDE_CODE_OAUTH_TOKEN environment
+#  variable, never in a file. These patterns are a backstop in case
+#  someone stores one anyway.
+# ---------------------------------------------------------------
+.env
+.env.*
+*.token
+*secret*
+*credentials*
