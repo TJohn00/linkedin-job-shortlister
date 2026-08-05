@@ -38,12 +38,18 @@ REM --browser-idle-timeout 0 keeps Chromium warm between hourly runs.
 REM The default (600s) would tear the browser down after 10 idle
 REM minutes and cold-start it on every single scheduled run, which
 REM defeats the point of a shared persistent hub.
+REM --timeout 20000 raises the per-page operation limit from the 5000ms
+REM default. At 5s the job-description section frequently had not rendered,
+REM so get_job_details returned a ~200 char stub with the header and no body.
+REM Measured: the SAME job returned 5388 chars once and 204 chars minutes
+REM later. Slower pages cost a few seconds; a stub costs the whole listing.
 start "LinkedIn MCP Hub" cmd /k uvx mcp-server-linkedin@latest ^
   --transport streamable-http ^
   --host %HUB_HOST% ^
   --port %HUB_PORT% ^
   --path %HUB_PATH% ^
   --browser-idle-timeout 0 ^
+  --timeout 20000 ^
   --log-level INFO
 
 :probe

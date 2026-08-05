@@ -16,11 +16,6 @@ Cost shape:
   - scoring.json llm.enabled=false -> 0 tokens, ever (rule scores only)
 
 Read-only on LinkedIn: only search_jobs and get_job_details are ever called.
-
-Talks to linkedin-mcp-server by Daniel Sticker, which does all the actual
-LinkedIn work: https://github.com/stickerdaniel/linkedin-mcp-server
-
-Licensed MIT. See LICENSE.
 """
 
 import json
@@ -96,15 +91,34 @@ class Mcp:
             if got:
                 self.sid = got
             raw = r.read().decode("utf-8", "replace")
+        raw = raw.lstrip("﻿")
         if not raw.strip():
             return None
-        s = raw.lstrip()
-        if s.startswith("event:") or s.startswith("data:"):
+
+        # Server-sent events may lead with ANY of: "event:", "data:", "id:",
+        # "retry:", or a ":" keepalive comment. Keying off only event:/data:
+        # meant a frame beginning with id: or a heartbeat fell through to
+        # json.loads() and crashed the run with "Expecting value: line 1
+        # column 1". Look for a data: line anywhere instead.
+        if "\ndata:" in raw or raw.startswith("data:"):
+            payload = None
             for line in raw.splitlines():
                 if line.startswith("data:"):
-                    return json.loads(line[5:].strip())
-            return None
-        return json.loads(raw)
+                    chunk = line[5:].strip()
+                    if chunk and chunk != "[DONE]":
+                        payload = chunk
+            if payload is None:
+                return None
+            return json.loads(payload)
+
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            # Never fail with a bare parser error - say what actually arrived.
+            snippet = raw.strip().replace("\n", " ")[:200]
+            raise RuntimeError(
+                f"{method}: expected JSON or SSE, got {len(raw)} chars: {snippet!r}"
+            ) from e
 
     def connect(self):
         r = self._rpc(
@@ -292,6 +306,68 @@ CUT_MARKERS = [
 ]
 KEEP_BLOCKS = ["Candidates who clicked apply", "Candidate seniority level"]
 
+# Pure UI chrome in the header. These lines carry no information about the job,
+# cost tokens, and actively mislead the model - it reported back that the JD
+# "only shows LinkedIn UI elements ('Put your best foot forward', 'Hire a resume
+# writer')". Location, work mode, age and applicant count are NOT in this list
+# and are kept.
+UI_NOISE = {
+    "apply", "save", "easy apply", "show all", "show more", "see more",
+    "use ai to assess how you fit", "show match details", "tailor my resume",
+    "create cover letter", "help me stand out", "people you can reach out to",
+    "hiring?", "hiring, not job hunting?", "post a job", "set alert",
+    "jump to active job details", "jump to active search result",
+    "put your best foot forward with your application", "hire a resume writer",
+    "get a resume review", "... more", "… more", "more",
+}
+
+# Markers that indicate the actual job description has begun. LinkedIn does not
+# always use "About the job" - keying off that alone meant postings without it
+# fell through to a 400-char header slice with NO description at all.
+JD_MARKERS = [
+    "About the job", "About the role", "Job Description", "Job description",
+    "About this role", "Role Summary", "Position Summary", "The Opportunity",
+    "Responsibilities", "Key Responsibilities", "What You", "What you",
+    "Requirements", "Qualifications", "Your role", "About Us", "Overview",
+]
+
+
+def has_job_description(text):
+    """True when the detail response actually contains a description.
+
+    LinkedIn sometimes returns a stub - company, title, location, badges and
+    nothing else (measured: one response was 247 chars total). Sending that to
+    the model wastes a call and produces a confusing 'rule score only' entry,
+    so detect it up front and say so plainly instead."""
+    if not text or len(text) < 700:
+        return False
+    return any(mk in text for mk in JD_MARKERS)
+
+
+def _drop_ui_noise(block):
+    out = []
+    for ln in block.splitlines():
+        t = ln.strip()
+        if t.lower() in UI_NOISE:
+            continue
+        out.append(ln)
+    return "\n".join(out)
+
+
+def _truncate_clean(s, limit):
+    """Cut at a paragraph or sentence boundary, never mid-sentence.
+
+    A hard slice made the model report the JD 'cuts off mid-sentence' and
+    refuse to score, so it must be visibly complete or visibly truncated."""
+    if len(s) <= limit:
+        return s
+    cut = s[:limit]
+    for sep in ("\n\n", ". ", "\n"):
+        i = cut.rfind(sep)
+        if i > limit * 0.6:
+            return cut[: i + len(sep)].rstrip() + "\n\n[description truncated]"
+    return cut.rstrip() + "\n\n[description truncated]"
+
 
 def strip_posting(text):
     """Keep the header line, the job description, and the applicant-insight
@@ -306,12 +382,19 @@ def strip_posting(text):
 
     parts = []
 
-    # 1. Header: company, title, "location - age - applicants".
-    head_end = text.find("About the job")
-    head = text[: head_end if head_end != -1 else 400][:400]
-    parts.append(head.strip())
+    # 1. Header: company, title, "location - age - applicants". UI chrome
+    #    stripped out.
+    head_end = -1
+    for mk in JD_MARKERS:
+        i = text.find(mk)
+        if i != -1 and (head_end == -1 or i < head_end):
+            head_end = i
+    head = text[: head_end if head_end != -1 else 400][:500]
+    parts.append(_drop_ui_noise(head).strip())
 
-    # 2. The description itself, cut at the first boilerplate marker.
+    # 2. The description itself, cut at the first boilerplate marker. Uses the
+    #    earliest of ALL JD_MARKERS, not just "About the job" - postings
+    #    lacking that exact phrase previously yielded a header and nothing else.
     if head_end != -1:
         core = text[head_end:]
         cut = len(core)
@@ -319,8 +402,8 @@ def strip_posting(text):
             i = core.find(mk)
             if i != -1:
                 cut = min(cut, i)
-        core = core[:cut].strip()
-        parts.append(core[:4000])
+        core = _drop_ui_noise(core[:cut]).strip()
+        parts.append(_truncate_clean(core, 4000))
 
     # 3. Applicant insight blocks - only if not already captured above.
     got = "\n".join(parts)
@@ -332,7 +415,7 @@ def strip_posting(text):
     out = "\n\n".join(p for p in parts if p)
     out = re.sub(r"[ \t]+\n", "\n", out)
     out = re.sub(r"\n{3,}", "\n\n", out)
-    return out[:4500]
+    return _truncate_clean(out, 4500)
 
 
 # Only count year figures that are actually about EXPERIENCE. A bare
@@ -660,6 +743,40 @@ def main():
     found_total = sum(r["got"] for r in search_rows)
     log(f"search: {mcp.search_calls} calls, {found_total} found, {len(all_jobs)} unique")
 
+    # ---- suspected dead session -----------------------------------------
+    # An expired LinkedIn session does not error: it serves an empty, gated
+    # results page, so every search returns 0 and the run looks like a quiet
+    # job market. That is the exact failure the health check exists to prevent,
+    # but HTTP reachability says nothing about session validity.
+    #
+    # Zero results across EVERY search is not credible - these queries
+    # historically return 16-26 jobs per run - so treat it as an auth failure:
+    # notify, and above all do NOT advance last_run, or the blind window is
+    # lost permanently.
+    if found_total == 0 and len(search_rows) > 0:
+        msg = ("SUSPECTED DEAD SESSION: every search returned 0 results. "
+               "LinkedIn serves an empty page when logged out. last_run NOT advanced. "
+               "Re-login: stop the hub, run 'uvx mcp-server-linkedin@latest --login', "
+               "then restart start-linkedin-hub.bat")
+        log(f"FATAL: {msg}")
+        result = {
+            "run_utc": now_iso, "search_calls": mcp.search_calls,
+            "searches": search_rows,
+            "counts": {"found": 0, "unique": 0, "new": 0, "detailed": 0,
+                       "deferred": 0, "excluded": 0, "saturated": 0, "stale": 0},
+            "warnings": [msg], "jobs": [],
+        }
+        rp0 = os.path.join(STATE, "run-result.json")
+        write_json_atomic(rp0, result)
+        ps("render-shortlist.ps1", "-ResultJson", rp0)
+        write_json_atomic(
+            os.path.join(STATE, "pending_notify.json"),
+            [{"id": f"AUTH-DEAD-{now.strftime('%Y%m%d-%H')}",
+              "title": "LinkedIn session may have expired", "company": "pipeline", "score": 10}],
+        )
+        ps("notify.ps1", "-JobsJson", os.path.join(STATE, "pending_notify.json"))
+        return 1
+
     # ---- filter ----------------------------------------------------------
     candidates = []
     for jid, j in all_jobs.items():
@@ -711,13 +828,28 @@ def main():
     # ---- details + rule score -------------------------------------------
     scored = []
     saturated = []
+    stub_ids = []
     sat = sc.get("saturation", {})
     for c in to_detail:
         d = mcp.call("get_job_details", {"job_id": c["id"]})
         mcp.detail_calls += 1
         raw = d.get("sections", {}).get("job_posting", "") or d.get("_raw", "")
-        stripped = strip_posting(raw)
+
+        # LinkedIn sometimes returns a stub with no description (measured: 247
+        # chars - company, title, badges, nothing else). Do not spend a model
+        # call on it: the model correctly refuses to score a header, which then
+        # surfaced as an unexplained "rule score only" entry.
+        no_jd = not has_job_description(raw)
+        stripped = "" if no_jd else strip_posting(raw)
         rs, yrs, reasons = rule_score(c, raw, sc)
+        if no_jd:
+            reasons.insert(0, "LinkedIn returned no job description")
+            # TRANSIENT, not a property of the posting: the same job returned
+            # 5388 chars with a full JD and 204 chars minutes later. The page
+            # simply had not rendered. So do NOT mark it seen - let a later run
+            # re-fetch it. Repeat cost is bounded, because once it ages past the
+            # freshness window it is rejected from the search page for free.
+            stub_ids.append(c["id"])
         n, capped, alabel = parse_applicants(raw)
         ah = c["age_h"] if c["age_h"] is not None else parse_age_hours(raw[:400])
         bloc = body_location(raw)
@@ -796,10 +928,19 @@ def main():
         log("llm: skipped (nothing to judge)" if not to_detail else "llm: disabled")
 
     # Anything the model did not cover keeps its rule score, labelled honestly.
+    # Explain WHY a job has no model verdict rather than printing a bare
+    # "rule score only", which gave no clue whether the cause was a missing
+    # description, a failed model call, or the candidate cap.
     for s in scored:
-        s.pop("stripped", None)
+        had_jd = bool(s.pop("stripped", None))
         if "fit" not in s:
-            s["fit"] = "Rule score only (no model judgement)."
+            if not had_jd:
+                s["fit"] = "Not judged - LinkedIn returned no job description for this posting."
+            elif not lc.get("enabled"):
+                s["fit"] = "Not judged - model scoring is disabled in scoring.json."
+            else:
+                s["fit"] = ("Not judged - model returned no verdict for this job "
+                            "(call failed, or beyond llm.max_candidates).")
         if "gap" not in s:
             s["gap"] = ", ".join(s["reasons"]) if s["reasons"] else "No rule penalties triggered."
         s.pop("reasons", None)
@@ -819,6 +960,12 @@ def main():
         },
         "jobs": scored,
     }
+    if stub_ids:
+        warnings.append(
+            f"{len(stub_ids)} job(s) returned no description (page had not rendered). "
+            "Left UNSEEN so a later run retries them. If this is frequent, raise "
+            "--timeout in start-linkedin-hub.bat and restart the hub."
+        )
     if warnings:
         result["warnings"] = warnings
     if excluded_out:
@@ -839,7 +986,8 @@ def main():
     log(f"shortlist: {shortlist}")
 
     # ---- state: ONLY after the shortlist exists --------------------------
-    detailed_ids = [s["id"] for s in scored]
+    # Stub responses are excluded so a later run can re-fetch the real body.
+    detailed_ids = [s["id"] for s in scored if s["id"] not in stub_ids]
     if detailed_ids:
         ps("state-commit.ps1", "-AddSeen", ",".join(detailed_ids))
     if excluded_out:
