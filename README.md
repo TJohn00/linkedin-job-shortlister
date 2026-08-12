@@ -43,8 +43,14 @@ Every one of those came from a single day of real runs.
 5. **Writes a shortlist** to `shortlists/YYYY-MM-DD-HH.md`, best first.
 6. **Notifies once** per run when something clears the bar.
 
-Nothing is ever hidden. Rejected, stale, saturated and blocked jobs all appear
-in the shortlist with the reason.
+Nothing is ever hidden. Rejected, stale, saturated, blocked and unresolvable
+jobs are all reported with the reason — the shortlist tells you what it passed
+over and why, not just what it liked.
+
+> **Status, August 2026.** LinkedIn changed its jobs layout and stopped linking
+> most result cards. The pipeline recovers those IDs with a follow-up search —
+> see [Surviving LinkedIn changes](#surviving-linkedin-changes) — so it still
+> works, at the cost of one extra search call per recovered job.
 
 ## Cost
 
@@ -60,9 +66,47 @@ A model is called **once per run, only when there are new jobs worth judging.**
 | N new jobs | 1 call, **~1.1k tokens per job** |
 | `llm.enabled: false` | **0 tokens, ever** |
 
-Three things get you there: **zero-token idle runs**, **stripped job
-descriptions** (company marketing, competitor analysis and "More jobs" blocks
-removed — 51% measured), and **title pre-rejection** before any detail call.
+Four layers get you there:
+
+| Layer | Effect |
+|---|---|
+| Idle runs | most runs find nothing new and never call a model |
+| Title pre-rejection | obvious misses dropped from *search results*, before any API call |
+| **Escalation bar** | **~43% of remaining calls skipped** (measured, see below) |
+| Stripped descriptions | company marketing, competitor analysis and "More jobs" removed — **51% smaller** |
+
+### The escalation bar
+
+A job is judged by the model only if it clears the rule-score bar **and** is
+plausibly in-field: either its **title** is one of the target families, or its
+**body** contains at least `min_keyword_hits` **distinct** profile keywords.
+
+Distinct, not total — a JD naming AWS nine times is not a better match than one
+naming AWS, Terraform and Kubernetes once each.
+
+The thresholds are set from measurement. Replayed against 7 jobs with known rule
+*and* model scores:
+
+| | rule | model | |
+|---|---|---|---|
+| **judge** | 7 | 9 | DevOps Engineer |
+| **judge** | 8 | 7 | DevOps Engineer |
+| skip | 4 | 5 | Azure DevOps Engineer |
+| skip | 1 | 4 | Senior Cloud Engineer |
+| **judge** | 7 | **3** | Senior SRE — body says it is actually an ML role |
+| skip | 4 | 3 | Google Cloud Engineer |
+| **judge** | 7 | 2 | Staff SRE |
+
+43% of calls skipped with nothing of value lost. Both strong matches are still
+judged, and so is the "Senior SRE" whose body reads *"not a standard QA, DevOps,
+or operational position"* — the semantic catch no regex can make, and exactly
+what the model is worth paying for. Everything skipped scored 3–5: rejects
+either way.
+
+Raising the bar to 7 would save one more call and lose that catch. Not worth it.
+
+Skipped jobs keep their rule score and still appear in the shortlist, with the
+fit line naming which bar they missed — a missing verdict is never a mystery.
 
 Defaults to Claude Haiku.
 
@@ -278,11 +322,126 @@ Positive keywords are capped hard. They are table stakes: nearly every posting
 in a field mentions that field's core stack, and summing them uncapped made
 every job score 10/10. The **negatives** discriminate.
 
+### Filters, in the order they run
+
+Each one is cheaper than the next, so the expensive checks only see survivors.
+
+| Filter | Cost of a rejection | What it drops |
+|---|---|---|
+| `seen_jobs` | free | already processed |
+| `excluded_companies` | free | aggregators and reposters, matched on the search page |
+| `title_reject` | free | intern / manager / staff / wrong-domain titles |
+| `freshness` | free when the age is visible | anything older than `max_age_minutes` |
+| `saturation` | 1 detail call | **applicant velocity** — see below |
+| escalation bar | 1 detail call, no tokens | jobs not plausibly in-field |
+
+**Applicant velocity** is about *rate*, not total. 20+ applicants inside the
+first hour means the pool was gone before the listing was cold; the same 20 over
+24 hours is a cold posting worth applying to. So `2h + 300 applicants` is still
+scored, while `30min + 21` is dropped. Unknown age or count is never dropped —
+the gate only fires on evidence.
+
+Saturated jobs are marked **seen**. Leave them out and an hour later they are no
+longer "<1h old", so they sail through the gate and get scored anyway — the
+opposite of the intent.
+
 ### Notifications
 
 One batched toast per run, never one per job — a catch-up run can produce a
 dozen. `state/notified.json` guarantees a job never alerts twice. Notification
 failure never fails the run: the shortlist file is the source of truth.
+
+A toast means "stop what you are doing and apply", so its bar is higher than the
+shortlist's. `config.notify` requires **all** of:
+
+| Condition | Default |
+|---|---|
+| score | ≥ 8 |
+| applicant count, **confirmed** | < 20 |
+| posted | within 30 min |
+
+`"Over 100"` never qualifies — a capped count is not a confirmed one. Nor does an
+unknown count.
+
+Deliberately independent of `scoring.freshness`, so widening that window later
+does not quietly loosen the alert bar.
+
+**Suppression is never silent.** Anything clearing the score bar but failing a
+condition appears under *"Scored high but NOT notified"* with the reason.
+
+---
+
+## Surviving LinkedIn changes
+
+LinkedIn changes its markup without warning, and a scraper that half-works is
+more dangerous than one that fails outright — a partial scrape looks exactly
+like a quiet job market. Three defences, all added after real breakages.
+
+### Recovering job IDs LinkedIn will not give you
+
+**In August 2026 LinkedIn shipped a jobs layout that broke ID extraction.**
+`/jobs/search/` began redirecting to `/jobs/search-results/`, cards started
+rendering the title twice with a `(Verified job)` label, and — critically — the
+page auto-selects the first result and renders the *other* cards as JS click
+targets rather than links.
+
+I dumped the entire MCP response and grepped it for every 10-digit ID and every
+`urn:li` identifier. The whole payload contained **one** job ID and **zero**
+urns. The server was not withholding anything; there was no href to extract.
+The same failure occurred on two server versions and on both a boolean query and
+a plain one-word keyword, so it was neither a regression nor query-specific.
+
+The fix follows from the cause. If only the auto-selected result carries a URL,
+**make the wanted job be that result**: search again with `"<title> <company>"`,
+which usually returns a single hit whose reference carries `/jobs/view/<id>/`.
+
+```
+"Lead - Product Reliability Engineer IDfy"  ->  1 result
+references -> /jobs/view/4417094807/
+get_job_details(4417094807) -> full body
+```
+
+Safeguards, because a wrong body is worse than no body:
+
+- the returned reference **title must agree** with the one being resolved — a
+  generic `"DevOps Engineer"` can surface another company's posting
+- runs **after** the freshness gate, so no call is spent on a stale job
+- budgeted by `limits.max_id_resolutions_per_run` (default 10; real runs use 0–3)
+- the recovered ID is re-checked against `seen_jobs` before fetching
+
+Jobs that still cannot be resolved are **counted and warned about, not
+shortlisted** — without a body, the real role, real location, years required and
+applicant count are all unverifiable. `include_unretrievable: true` lists them as
+capped title-only entries if you would rather see them.
+
+### Telling failure modes apart
+
+A dead session and a broken extractor both produce zero results, but the
+remedies are opposite — re-logging in does nothing for a markup change. So the
+run distinguishes them:
+
+- page reported a result count but **no IDs came back** → `EXTRACTOR BROKEN`,
+  pointing at the upstream tracker
+- page reported **nothing at all** → `SUSPECTED DEAD SESSION`, with re-login steps
+
+Either way `last_run` is **not** advanced, so the window is not lost.
+
+### Partial extraction
+
+Retrieving fewer than 25% of the results LinkedIn claims raises a warning:
+
+```
+PARTIAL EXTRACTION: LinkedIn reported ~172 results
+but only 3 job IDs were retrieved (1%)
+```
+
+### Empty job descriptions
+
+LinkedIn intermittently returns a stub with no body — one response was **247
+characters**. The same job returned 5388 chars and 204 chars minutes apart, so
+it is a slow render, not a property of the posting. Stubs are detected, skipped
+for model scoring, and deliberately left **unseen** so a later run refetches the
+real body. Raise `--timeout` in `start-linkedin-hub.bat` if it is frequent.
 
 ---
 
@@ -324,8 +483,17 @@ function unrolls it — use `return ,$set`.
 **LinkedIn quirks.** The "N results" header over-counts what pagination will
 actually serve. Jobs you have viewed show "Viewed" instead of an age. Broad
 queries append recommendation blocks containing jobs from other cities and
-outside the date window — trust `job_ids`, ignore everything after
-`Are these results helpful?`.
+outside the date window — ignore everything after `Are these results helpful?`.
+Since Aug 2026 only the auto-selected first card carries a link at all; see
+[Surviving LinkedIn changes](#surviving-linkedin-changes).
+
+**Applicant counts only exist in `get_job_details`.** Filtering on them can
+never save an API call — it only decides what reaches the shortlist. Which is
+why applicant count is a scoring input rather than a hard filter.
+
+**MCP over HTTP is plain JSON-RPC**, so none of this needs an LLM to drive it.
+Note that SSE frames may lead with `id:`, `retry:` or a `:` keepalive comment,
+not just `event:`/`data:` — keying off the latter two crashes on the others.
 
 **Scheduled tasks.** Must run with interactive logon or toasts cannot render.
 Hiding the *window* is fine and does not change the session — this repo uses a
