@@ -1,100 +1,200 @@
-{
-  "_comment": "EDIT profile_brief AND the keyword weights TO MATCH YOUR OWN CV. Everything here is an example tuned for a mid-level AWS/Terraform DevOps engineer - it will score badly for anyone else. The rule score is a SCREEN, not a verdict: it ranks candidates and decides who is worth an LLM call. Measured against real LLM scores on 7 jobs, mean absolute error was ~2.4 points: good enough to rank, not good enough to trust alone.",
-
-  "_profile_brief_comment": "The ONLY thing the model is told about you. Keep it under ~200 words - it is sent on every judged run, so length costs tokens. Be explicit about what you DO NOT have: the 'ABSENT' list is what makes the model reject plausible-looking mismatches. Replace this entirely.",
-  "profile_brief": "EXAMPLE - REPLACE ME. DevOps/Cloud Engineer, 4.5 yrs. Core: AWS (ECS/EC2/Lambda/RDS/S3/IAM/CloudWatch), Terraform, CI/CD (Jenkins, GitHub Actions, Azure DevOps), Docker, Python, Bash. Strong: OIDC keyless CI auth, IAM least-privilege, DevSecOps scanning, cloud cost/FinOps, Linux, Nginx. WORKING KNOWLEDGE ONLY (treat deep requirements as gaps): Kubernetes. ABSENT (hard gaps): Azure or GCP as primary cloud, Ansible/Chef/Puppet, deep K8s/OpenShift admin, Go/Java/.NET, data engineering, ML, SAP/Oracle/Salesforce, networking (BGP/Cisco/F5), L1/NOC support. Target band 3-7 yrs, sweet spot 3-6. Out of band: 0-2 yrs, 8+ yrs, Staff/Principal/Architect/Manager. Locations: <your cities>, or genuine remote.",
-
-  "base_score": 5,
-
-  "_positive_cap_comment": "Positive keywords are TABLE STAKES - nearly every posting in your field mentions your core stack. Summing them uncapped made every job score 10/10 and destroyed all ranking signal (measured). Capped, they only separate a relevant post from an irrelevant one; the negatives below do the actual discriminating.",
-  "positive_cap": 3,
-
-  "_title_reject_comment": "Substring match on the lowercased TITLE, applied BEFORE get_job_details, so a reject costs ZERO detail calls. Verified worth it: 'Staff Site Reliability Engineer' was the worst rule-score error (+5 vs the model) and this list catches it for free. Keep it CONSERVATIVE - it is a blacklist, not a ranking. Anything not obviously wrong must still get its body read, because titles mislead constantly.",
-  "title_reject": [
-    "intern", "internship", "fresher", "trainee", "apprentice",
-    "manager", "director", "head of", "principal", "staff ",
-    "architect", "avp", "vice president", " vp ",
-    "sap", "oracle", "salesforce", "microstrategy", "workday", "servicenow developer",
-    "data engineer", "data scientist", "machine learning", "ml engineer",
-    "network engineer", "noc ", "service desk", "helpdesk", "desktop support",
-    "qa ", "test engineer", "business analyst", "scrum master",
-    "frontend", "front end", "react", "angular", "ui developer",
-    "windows admin", "windows server", "vmware", "citrix", "mainframe"
-  ],
-
-  "positive": {
-    "aws": 3, "terraform": 3, "ci/cd": 2, "cicd": 2, "jenkins": 2,
-    "github actions": 2, "azure devops": 1, "bitbucket": 1,
-    "docker": 2, "python": 1, "bash": 1, "linux": 1,
-    "cloudformation": 2, "iam": 1, "cloudwatch": 1, "ecs": 2, "eks": 1,
-    "lambda": 1, "devsecops": 2, "sonarqube": 1, "sonarcloud": 1,
-    "finops": 3, "cost optimization": 2, "cost optimisation": 2,
-    "observability": 1, "prometheus": 1, "grafana": 1, "nginx": 1,
-    "site reliability": 2, "platform engineer": 2, "devops": 3, "sre": 2
-  },
-
-  "negative": {
-    "ansible": -3, "chef": -2, "puppet": -2, "saltstack": -2,
-    "openshift": -3, "tanzu": -2, "pivotal cloud foundry": -2,
-    "snowflake": -3, "dbt": -3, "informatica": -3,
-    "microstrategy": -4, "sap": -4, "abap": -4, "salesforce": -4,
-    "flexera": -4, "itil": -2, "service desk": -3, "l1 support": -4,
-    "bgp": -3, "sd-wan": -3, "fortinet": -3, "f5 ": -2,
-    "elastic stack": -2, "elasticsearch": -1,
-    ".net": -2, "c#": -2, "golang": -1, "java developer": -3,
-    "24/7 shift": -3, "rotating shift": -2, "unpaid": -5
-  },
-
-  "cloud_primary": {
-    "_comment": "Penalty when a cloud you do NOT know dominates the body (by mention count).",
-    "azure_threshold": 4,
-    "azure_penalty": -3,
-    "gcp_threshold": 3,
-    "gcp_penalty": -3
-  },
-
-  "years": {
-    "_comment": "Parsed only from figures qualified by 'of experience'. A bare number regex grabs incidentals like '1 year of free training' and reports a 3-7yr role as wanting 1 year (measured, then fixed).",
-    "sweet_min": 3,
-    "sweet_max": 6,
-    "band_max": 7,
-    "over_band_penalty": -4,
-    "far_over_penalty": -6,
-    "under_band_penalty": -4
-  },
-
-  "kubernetes": {
-    "_comment": "Example of grading a partial skill: penalise only when it reads as a hard requirement, not whenever it is mentioned. Adapt or delete for your own stack.",
-    "required_markers": ["kubernetes is a must", "must have kubernetes", "strong kubernetes", "deep kubernetes", "production kubernetes", "kubernetes experience is a must", "expert in kubernetes"],
-    "required_penalty": -3,
-    "mentioned_penalty": 0
-  },
-
-  "applicants": {
-    "soft_ceiling": 20,
-    "cold_bonus": 2,
-    "near_neutral": 60,
-    "crowded_penalty": -1
-  },
-
-  "freshness": {
-    "_comment": "Only score jobs posted within this window. WARNING: LinkedIn surfaces jobs unreliably - measured, two roles appeared a full DAY late because page-1 ordering reshuffled. Anything seen late is permanently invisible under a tight cap. Skipped jobs ARE listed in the shortlist so the loss is visible. 30 suits a 30-minute schedule and a hypercompetitive market; 90-120 is safer. Set enabled=false to score everything within max_posted_age_days.",
-    "enabled": true,
-    "max_age_minutes": 30
-  },
-
-  "saturation": {
-    "_comment": "Applicant VELOCITY, not raw count. 20+ applicants within the first hour means the pool is already saturated; the same 20 over 24h is a cold posting worth applying to. Dropped before the LLM call, so they cost no tokens, and listed separately rather than hidden.",
-    "enabled": true,
-    "max_age_hours": 1,
-    "applicant_threshold": 20
-  },
-
-  "llm": {
-    "_comment": "ONE call per run, only when there is something to judge. Set enabled=false for a fully offline, zero-token pipeline - you keep the rule scores but lose semantic catches, e.g. a posting titled 'Senior SRE' whose body reads 'not a standard QA, DevOps, or operational position' and is actually an ML role. No regex sees that.",
-    "enabled": true,
-    "model": "claude-haiku-4-5-20251001",
-    "min_rule_score": 0,
-    "max_candidates": 8
-  }
+﻿{
+    "_comment":  "EDIT profile_brief AND the keyword weights TO MATCH YOUR OWN CV. Everything here is an example tuned for a mid-level AWS/Terraform DevOps engineer - it will score badly for anyone else. The rule score is a SCREEN, not a verdict: it ranks candidates and decides who is worth an LLM call. Measured against real LLM scores on 7 jobs, mean absolute error was ~2.4 points: good enough to rank, not good enough to trust alone.",
+    "_profile_brief_comment":  "The ONLY thing the model is told about you. Keep it under ~200 words - it is sent on every judged run, so length costs tokens. Be explicit about what you DO NOT have: the \u0027ABSENT\u0027 list is what makes the model reject plausible-looking mismatches. Replace this entirely.",
+    "profile_brief":  "EXAMPLE - REPLACE ME. DevOps/Cloud Engineer, 4.5 yrs. Core: AWS (ECS/EC2/Lambda/RDS/S3/IAM/CloudWatch), Terraform, CI/CD (Jenkins, GitHub Actions, Azure DevOps), Docker, Python, Bash. Strong: OIDC keyless CI auth, IAM least-privilege, DevSecOps scanning, cloud cost/FinOps, Linux, Nginx. WORKING KNOWLEDGE ONLY (treat deep requirements as gaps): Kubernetes. ABSENT (hard gaps): Azure or GCP as primary cloud, Ansible/Chef/Puppet, deep K8s/OpenShift admin, Go/Java/.NET, data engineering, ML, SAP/Oracle/Salesforce, networking (BGP/Cisco/F5), L1/NOC support. Target band 3-7 yrs, sweet spot 3-6. Out of band: 0-2 yrs, 8+ yrs, Staff/Principal/Architect/Manager. Locations: \u003cyour cities\u003e, or genuine remote.",
+    "base_score":  5,
+    "_positive_cap_comment":  "Positive keywords are TABLE STAKES - nearly every posting in your field mentions your core stack. Summing them uncapped made every job score 10/10 and destroyed all ranking signal (measured). Capped, they only separate a relevant post from an irrelevant one; the negatives below do the actual discriminating.",
+    "positive_cap":  3,
+    "_title_reject_comment":  "Substring match on the lowercased TITLE, applied BEFORE get_job_details, so a reject costs ZERO detail calls. Verified worth it: \u0027Staff Site Reliability Engineer\u0027 was the worst rule-score error (+5 vs the model) and this list catches it for free. Keep it CONSERVATIVE - it is a blacklist, not a ranking. Anything not obviously wrong must still get its body read, because titles mislead constantly.",
+    "title_reject":  [
+                         "intern",
+                         "internship",
+                         "fresher",
+                         "trainee",
+                         "apprentice",
+                         "manager",
+                         "director",
+                         "head of",
+                         "principal",
+                         "staff ",
+                         "architect",
+                         "avp",
+                         "vice president",
+                         " vp ",
+                         "sap",
+                         "oracle",
+                         "salesforce",
+                         "microstrategy",
+                         "workday",
+                         "servicenow developer",
+                         "data engineer",
+                         "data scientist",
+                         "machine learning",
+                         "ml engineer",
+                         "network engineer",
+                         "noc ",
+                         "service desk",
+                         "helpdesk",
+                         "desktop support",
+                         "qa ",
+                         "test engineer",
+                         "business analyst",
+                         "scrum master",
+                         "frontend",
+                         "front end",
+                         "react",
+                         "angular",
+                         "ui developer",
+                         "windows admin",
+                         "windows server",
+                         "vmware",
+                         "citrix",
+                         "mainframe"
+                     ],
+    "positive":  {
+                     "aws":  3,
+                     "terraform":  3,
+                     "ci/cd":  2,
+                     "cicd":  2,
+                     "jenkins":  2,
+                     "github actions":  2,
+                     "azure devops":  1,
+                     "bitbucket":  1,
+                     "docker":  2,
+                     "python":  1,
+                     "bash":  1,
+                     "linux":  1,
+                     "cloudformation":  2,
+                     "iam":  1,
+                     "cloudwatch":  1,
+                     "ecs":  2,
+                     "eks":  1,
+                     "lambda":  1,
+                     "devsecops":  2,
+                     "sonarqube":  1,
+                     "sonarcloud":  1,
+                     "finops":  3,
+                     "cost optimization":  2,
+                     "cost optimisation":  2,
+                     "observability":  1,
+                     "prometheus":  1,
+                     "grafana":  1,
+                     "nginx":  1,
+                     "site reliability":  2,
+                     "platform engineer":  2,
+                     "devops":  3,
+                     "sre":  2
+                 },
+    "negative":  {
+                     "ansible":  -3,
+                     "chef":  -2,
+                     "puppet":  -2,
+                     "saltstack":  -2,
+                     "openshift":  -3,
+                     "tanzu":  -2,
+                     "pivotal cloud foundry":  -2,
+                     "snowflake":  -3,
+                     "dbt":  -3,
+                     "informatica":  -3,
+                     "microstrategy":  -4,
+                     "sap":  -4,
+                     "abap":  -4,
+                     "salesforce":  -4,
+                     "flexera":  -4,
+                     "itil":  -2,
+                     "service desk":  -3,
+                     "l1 support":  -4,
+                     "bgp":  -3,
+                     "sd-wan":  -3,
+                     "fortinet":  -3,
+                     "f5 ":  -2,
+                     "elastic stack":  -2,
+                     "elasticsearch":  -1,
+                     ".net":  -2,
+                     "c#":  -2,
+                     "golang":  -1,
+                     "java developer":  -3,
+                     "24/7 shift":  -3,
+                     "rotating shift":  -2,
+                     "unpaid":  -5
+                 },
+    "cloud_primary":  {
+                          "_comment":  "Penalty when a cloud you do NOT know dominates the body (by mention count).",
+                          "azure_threshold":  4,
+                          "azure_penalty":  -3,
+                          "gcp_threshold":  3,
+                          "gcp_penalty":  -3
+                      },
+    "years":  {
+                  "_comment":  "Parsed only from figures qualified by \u0027of experience\u0027. A bare number regex grabs incidentals like \u00271 year of free training\u0027 and reports a 3-7yr role as wanting 1 year (measured, then fixed).",
+                  "sweet_min":  3,
+                  "sweet_max":  6,
+                  "band_max":  7,
+                  "over_band_penalty":  -4,
+                  "far_over_penalty":  -6,
+                  "under_band_penalty":  -4
+              },
+    "kubernetes":  {
+                       "_comment":  "Example of grading a partial skill: penalise only when it reads as a hard requirement, not whenever it is mentioned. Adapt or delete for your own stack.",
+                       "required_markers":  [
+                                                "kubernetes is a must",
+                                                "must have kubernetes",
+                                                "strong kubernetes",
+                                                "deep kubernetes",
+                                                "production kubernetes",
+                                                "kubernetes experience is a must",
+                                                "expert in kubernetes"
+                                            ],
+                       "required_penalty":  -3,
+                       "mentioned_penalty":  0
+                   },
+    "applicants":  {
+                       "soft_ceiling":  20,
+                       "cold_bonus":  2,
+                       "near_neutral":  60,
+                       "crowded_penalty":  -1
+                   },
+    "freshness":  {
+                      "_comment":  "Only score jobs posted within this window. WARNING: LinkedIn surfaces jobs unreliably - measured, two roles appeared a full DAY late because page-1 ordering reshuffled. Anything seen late is permanently invisible under a tight cap. Skipped jobs ARE listed in the shortlist so the loss is visible. 30 suits a 30-minute schedule and a hypercompetitive market; 90-120 is safer. Set enabled=false to score everything within max_posted_age_days.",
+                      "enabled":  true,
+                      "max_age_minutes":  30
+                  },
+    "saturation":  {
+                       "_comment":  "Applicant VELOCITY, not raw count. 20+ applicants within the first hour means the pool is already saturated; the same 20 over 24h is a cold posting worth applying to. Dropped before the LLM call, so they cost no tokens, and listed separately rather than hidden.",
+                       "enabled":  true,
+                       "max_age_hours":  1,
+                       "applicant_threshold":  20
+                   },
+    "llm":  {
+                "_comment":  "ONE call per run, only when there is something to judge. Set enabled=false for a fully offline, zero-token pipeline - you keep rule scores but lose semantic catches, e.g. a posting titled \u0027Senior SRE\u0027 whose body reads \u0027not a standard QA, DevOps, or operational position\u0027 and is actually an ML role. No regex sees that.",
+                "_escalation_comment":  "A job is judged by the model ONLY if it clears the rule-score bar AND is plausibly in-field - either its TITLE is one of the target families, or its BODY contains at least min_keyword_hits DISTINCT profile keywords. Everything else keeps its rule score and costs zero tokens; the shortlist states which bar it missed. Thresholds are set from measurement, not taste: on the 7-job comparison set, min_rule_score 5 still escalates the Akamai \u0027Senior SRE\u0027 that was really an ML role (rule 7) - the exact case worth paying for - while skipping the ones the model also scored 4-5.",
+                "enabled":  true,
+                "model":  "claude-haiku-4-5-20251001",
+                "min_rule_score":  5,
+                "min_keyword_hits":  4,
+                "domain_title_terms":  [
+                                           "devops",
+                                           "sre",
+                                           "site reliability",
+                                           "platform engineer",
+                                           "platform eng",
+                                           "cloud engineer",
+                                           "cloud infrastructure",
+                                           "infrastructure engineer",
+                                           "kubernetes",
+                                           "k8s",
+                                           "eks",
+                                           "gitops",
+                                           "build and release",
+                                           "devsecops",
+                                           "reliability engineer",
+                                           "systems engineer",
+                                           "cloud ops",
+                                           "cloudops",
+                                           "production engineer",
+                                           "release engineer",
+                                           "automation engineer"
+                                       ],
+                "max_candidates":  8
+            }
 }

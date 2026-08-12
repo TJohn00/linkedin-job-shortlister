@@ -630,6 +630,42 @@ def body_location(text):
 # --------------------------------------------------------------------------
 # Rule scoring
 # --------------------------------------------------------------------------
+def count_keyword_hits(body, cfg):
+    """How many DISTINCT profile keywords appear in the body.
+
+    Distinct, not total: a JD that says "AWS" nine times is not a better match
+    than one naming AWS, Terraform and Kubernetes once each."""
+    low = (body or "").lower()
+    return sum(1 for kw in cfg["positive"] if kw in low)
+
+
+def should_escalate(entry, cfg, lc):
+    """Decide whether a job is worth spending a model call on.
+
+    Escalation exists to catch what regex cannot - a posting titled 'Senior
+    SRE' whose body says it is actually an ML role. That judgement is only
+    worth paying for on jobs that are plausibly yours in the first place.
+
+    Returns (bool, reason_if_skipped).
+    """
+    rs = entry.get("rule_score", 0)
+    if rs < lc.get("min_rule_score", 0):
+        return False, f"rule score {rs} below escalation bar {lc.get('min_rule_score')}"
+
+    title_low = (entry.get("title") or "").lower()
+    title_ok = any(t in title_low for t in lc.get("domain_title_terms", []))
+    hits = entry.get("kw_hits", 0)
+    min_hits = lc.get("min_keyword_hits", 0)
+
+    # Either the title is in the right family, or the body is dense enough in
+    # profile keywords to be worth a closer look. Failing both means it is
+    # neither the right kind of role nor built on a familiar stack.
+    if not title_ok and hits < min_hits:
+        return False, (f"title outside target families and only {hits} profile "
+                       f"keyword(s) in body (need {min_hits})")
+    return True, ""
+
+
 def rule_score(job, body, cfg):
     """Heuristic screen, NOT a verdict.
 
@@ -1136,6 +1172,7 @@ def main():
             "applicants_n": n, "applicants_capped": capped,
             "age": age_label(ah), "age_hours": round(ah, 2) if ah is not None else None,
             "score": round(rs), "rule_score": round(rs, 1),
+            "kw_hits": count_keyword_hits(raw, sc),
             "years": yrs, "reasons": reasons, "stripped": stripped,
             "url": f"https://www.linkedin.com/jobs/view/{c['id']}/",
         })
@@ -1182,8 +1219,18 @@ def main():
     if lc.get("enabled") and to_detail:
         # .get(), not []: text-only and title-rejected entries never carry
         # 'stripped' or 'rule_score', and indexing them raised KeyError.
-        cands = [s for s in scored
-                 if s.get("stripped") and s.get("rule_score", 0) >= lc["min_rule_score"]]
+        cands, skipped = [], 0
+        for s in scored:
+            if not s.get("stripped"):
+                continue
+            ok, why = should_escalate(s, sc, lc)
+            if not ok:
+                s["_no_llm"] = why
+                skipped += 1
+                continue
+            cands.append(s)
+        if skipped:
+            log(f"llm: skipped {skipped} job(s) below the escalation bar (0 tokens)")
         cands.sort(key=lambda x: -x.get("rule_score", 0))
         cands = cands[: lc["max_candidates"]]
         if cands:
@@ -1207,9 +1254,12 @@ def main():
     # description, a failed model call, or the candidate cap.
     for s in scored:
         had_jd = bool(s.pop("stripped", None))
+        why = s.pop("_no_llm", None)
         if "fit" not in s:
             if not had_jd:
                 s["fit"] = "Not judged - LinkedIn returned no job description for this posting."
+            elif why:
+                s["fit"] = f"Not judged to save tokens - {why}. Rule score only."
             elif not lc.get("enabled"):
                 s["fit"] = "Not judged - model scoring is disabled in scoring.json."
             else:
@@ -1220,6 +1270,7 @@ def main():
         s.pop("reasons", None)
         s.pop("rule_score", None)
         s.pop("years", None)
+        s.pop("kw_hits", None)
 
     # ---- write result + render ------------------------------------------
     result = {
