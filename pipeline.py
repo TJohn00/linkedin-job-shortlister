@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 pipeline.py - hybrid LinkedIn job shortlister.
 
@@ -24,6 +24,7 @@ import re
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -91,6 +92,8 @@ class Mcp:
             if got:
                 self.sid = got
             raw = r.read().decode("utf-8", "replace")
+        # Escape sequence, not a literal BOM: a PowerShell round-trip of this
+        # file re-encoded the literal into three CP1252 chars.
         raw = raw.lstrip("﻿")
         if not raw.strip():
             return None
@@ -225,6 +228,95 @@ def parse_applicants(text):
 # Search result parsing - trust job_ids, ignore recommendation blocks
 # --------------------------------------------------------------------------
 NOISE_MARKER = "Are these results helpful?"
+LOOSE_MARKER = "We found more results related to your search"
+
+# Lines that are chrome inside a result card, not data.
+_CARD_NOISE = re.compile(
+    r"^(be an early applicant|easy apply|actively reviewing applicants|viewed|"
+    r"promoted|how promoted jobs are ranked|Â·|[\d,]+\s+(company alumni|connections?|"
+    r"school alumni|alumni|person|people)\b.*|selected,?|\w[\w\s]*\(\d+\s*km\)|"
+    r"[\d,]+ results?|responses managed off linkedin|"
+    r"company review time.*|[\d,]+K? ?INR/yr.*|Â·\s*)$",
+    re.I,
+)
+_POSTED_RE = re.compile(r"^(?:Posted\s+)?((?:just now|moments ago|\d+\s+\w+\s+ago))$", re.I)
+_MODE_RE = re.compile(r"\((On-site|Remote|Hybrid)\)", re.I)
+
+
+def parse_search_text(blob):
+    """Fallback parser for when the server returns page text but no job_ids.
+
+    LinkedIn's 2026-08 jobs layout auto-selects the first result and only
+    exposes that one card's link, so `job_ids` comes back empty or with a
+    single entry. The text still carries title, company, location, work mode,
+    posted age and the 'Be an early applicant' badge - enough to tell you a
+    relevant role exists and how fresh it is, even without the body.
+
+    Returns records WITHOUT a real job id; the caller synthesises one.
+    """
+    if not blob:
+        return []
+    body = blob.split(NOISE_MARKER)[0]
+    # Everything after this heading is LinkedIn's "not exact matches" filler.
+    body = body.split(LOOSE_MARKER)[0]
+
+    lines = []
+    for raw in body.splitlines():
+        t = raw.strip()
+        if not t or _CARD_NOISE.match(t):
+            continue
+        lines.append(t)
+
+    records, cur = [], []
+    for t in lines:
+        m = _POSTED_RE.match(t)
+        if m:
+            if cur:
+                records.append((cur, m.group(1)))
+            cur = []
+            continue
+        cur.append(t)
+
+    out = []
+    for fields, age_txt in records:
+        # Drop the duplicated title line and the "(Verified job)" suffix.
+        cleaned = []
+        for f in fields:
+            # "Selected, <Title> (Verified job)" is the auto-opened card. Strip
+            # both decorations BEFORE the duplicate check, or the prefixed copy
+            # and the plain copy look different and the title leaks into the
+            # company field.
+            f = re.sub(r"^Selected,\s*", "", f)
+            f = re.sub(r"\s*\(Verified job\)\s*$", "", f).strip()
+            if cleaned and f == cleaned[-1]:
+                continue
+            cleaned.append(f)
+        if len(cleaned) < 2:
+            continue
+
+        title = cleaned[0]
+        company = cleaned[1]
+        loc = ""
+        for f in cleaned[2:]:
+            if _MODE_RE.search(f) or "," in f or "Area" in f or "Region" in f:
+                loc = f
+                break
+        out.append({
+            "title": title,
+            "company": company,
+            "loc": loc,
+            "age_h": parse_age_hours(age_txt),
+            "early": "be an early applicant" in body.lower(),
+        })
+    return out
+
+
+def synth_id(title, company):
+    """Stable pseudo-id so dedup and seen_jobs work without a real job id."""
+    import hashlib
+
+    h = hashlib.sha1(f"{title}|{company}".lower().encode("utf-8")).hexdigest()[:16]
+    return f"TXT-{h}"
 
 
 def parse_search(payload):
@@ -253,6 +345,45 @@ def parse_search(payload):
     # Fall back to positional pairing if references are absent.
     if not titles:
         titles = [(i, "") for i in ids]
+
+    # DEGRADED MODE. Since 2026-08 LinkedIn auto-selects the first result and
+    # exposes only that card's link, so job_ids arrives empty or with one
+    # entry while the page text still lists every job. Rather than report a
+    # quiet market, recover what the text does carry: title, company, location,
+    # age and the early-applicant badge. These records have no real job id, so
+    # the body cannot be fetched - they are flagged text_only and clearly
+    # labelled in the shortlist.
+    if len(titles) < 3:
+        text_jobs = parse_search_text(blob)
+        if len(text_jobs) > len(titles):
+            known = {t for _, t in titles}
+            out = []
+            for j in text_jobs:
+                out.append({
+                    "id": synth_id(j["title"], j["company"]),
+                    "title": j["title"],
+                    "company": j["company"],
+                    "loc": j["loc"],
+                    "age_h": j["age_h"],
+                    "text_only": True,
+                    "early": j.get("early", False),
+                })
+            # Keep any real id we did get - its body IS fetchable. Merge the
+            # text record's company/location/age onto it and drop the
+            # text-only duplicate, or the same job appears twice and the real
+            # one renders with an empty company.
+            by_title = {j["title"]: j for j in text_jobs}
+            for jid, title in titles:
+                meta = by_title.get(title, {})
+                out = [o for o in out if o["title"] != title]
+                out.insert(0, {
+                    "id": str(jid), "title": title,
+                    "company": meta.get("company", ""),
+                    "loc": meta.get("loc", ""),
+                    "age_h": meta.get("age_h"),
+                    "text_only": False,
+                })
+            return out, header_count
 
     lines = [ln.rstrip() for ln in body.splitlines()]
     jobs = []
@@ -318,7 +449,7 @@ UI_NOISE = {
     "hiring?", "hiring, not job hunting?", "post a job", "set alert",
     "jump to active job details", "jump to active search result",
     "put your best foot forward with your application", "hire a resume writer",
-    "get a resume review", "... more", "… more", "more",
+    "get a resume review", "... more", "â€¦ more", "more",
 }
 
 # Markers that indicate the actual job description has begun. LinkedIn does not
@@ -422,7 +553,7 @@ def strip_posting(text):
 # "(\d+) years" min-across-the-document grabs incidentals like "1 year of
 # free training" and reports a 3-7yr role as wanting 1 year.
 YEARS_RE = re.compile(
-    r"(\d{1,2})\s*(?:\+|\s*(?:to|-|–)\s*\d{1,2})?\s*\+?\s*"
+    r"(\d{1,2})\s*(?:\+|\s*(?:to|-|â€“)\s*\d{1,2})?\s*\+?\s*"
     r"(?:years?|yrs?)(?:\s+of)?\s+"
     r"(?:relevant\s+|applied\s+|hands[- ]on\s+|professional\s+|total\s+|overall\s+)?"
     r"(?:experience|exp\b)",
@@ -826,7 +957,10 @@ def main():
         candidates.append(j)
 
     prerejected = [c for c in candidates if c.get("_prereject")]
-    to_detail = [c for c in candidates if not c.get("_prereject")]
+    # text_only records have no real job id, so there is no body to fetch.
+    text_only = [c for c in candidates if c.get("text_only") and not c.get("_prereject")]
+    to_detail = [c for c in candidates
+                 if not c.get("_prereject") and not c.get("text_only")]
 
     # ---- freshness gate --------------------------------------------------
     # Applied here, BEFORE details, whenever the search page gave us an age -
@@ -926,6 +1060,30 @@ def main():
             "url": f"https://www.linkedin.com/jobs/view/{c['id']}/",
         })
 
+    # Text-only records: scored on title + company alone. Deliberately capped
+    # at 7 - without the body we cannot verify the real role, real location or
+    # years required, and those are exactly what this pipeline exists to check.
+    # A capped score keeps them out of the 8+ notification band.
+    for c in text_only:
+        surrogate = f"{c['title']} {c['company']}"
+        rs, _, _ = rule_score(c, surrogate, sc)
+        rs = min(rs, 7)
+        if c.get("early"):
+            rs = min(rs + 1, 7)
+        scored.append({
+            "id": c["id"], "title": c["title"], "company": c["company"],
+            "loc": c["loc"] or "-",
+            "applicants": "early applicant" if c.get("early") else "unknown",
+            "applicants_n": None, "applicants_capped": False,
+            "age": age_label(c["age_h"]),
+            "age_hours": round(c["age_h"], 2) if c["age_h"] is not None else None,
+            "score": int(round(rs)),
+            "fit": "TITLE ONLY - body unavailable (LinkedIn extractor broken; see run warnings).",
+            "gap": "Not verified: real role, real location and years required are unknown.",
+            "url": "https://www.linkedin.com/jobs/search/?keywords="
+                   + urllib.parse.quote(c["title"]),
+        })
+
     # Title-rejected jobs are recorded, never detailed - they cost 0 calls.
     for c in prerejected:
         scored.append({
@@ -941,8 +1099,11 @@ def main():
     # ---- LLM escalation --------------------------------------------------
     lc = sc["llm"]
     if lc.get("enabled") and to_detail:
-        cands = [s for s in scored if s["stripped"] and s["rule_score"] >= lc["min_rule_score"]]
-        cands.sort(key=lambda x: -x["rule_score"])
+        # .get(), not []: text-only and title-rejected entries never carry
+        # 'stripped' or 'rule_score', and indexing them raised KeyError.
+        cands = [s for s in scored
+                 if s.get("stripped") and s.get("rule_score", 0) >= lc["min_rule_score"]]
+        cands.sort(key=lambda x: -x.get("rule_score", 0))
         cands = cands[: lc["max_candidates"]]
         if cands:
             log(f"llm: judging {len(cands)} candidate(s) via {lc['model']}")
