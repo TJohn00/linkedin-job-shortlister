@@ -496,10 +496,15 @@ def rule_score(job, body, cfg):
         s += cp["gcp_penalty"]
         reasons.append("GCP-primary")
 
+    # Kubernetes depth is a signed WEIGHT, not a fixed penalty. It was -3 when
+    # K8s was working-knowledge only; with production EKS experience the same
+    # requirement is a positive signal. `required_score` is the current key;
+    # `required_penalty` is still read so an older config keeps working.
     k = cfg["kubernetes"]
-    if any(mk in low for mk in k["required_markers"]):
-        s += k["required_penalty"]
-        reasons.append("deep K8s required")
+    kw = k.get("required_score", k.get("required_penalty", 0))
+    if kw and any(mk in low for mk in k["required_markers"]):
+        s += kw
+        reasons.append("deep K8s role" if kw > 0 else "deep K8s required")
 
     y = parse_years(body)
     yc = cfg["years"]
@@ -743,6 +748,20 @@ def main():
     found_total = sum(r["got"] for r in search_rows)
     log(f"search: {mcp.search_calls} calls, {found_total} found, {len(all_jobs)} unique")
 
+    # Partial extraction is worse than total failure, because it looks like a
+    # normal run. If LinkedIn says "68 results" and we retrieved 3, the markup
+    # has drifted and most jobs are invisible - surface it rather than quietly
+    # shortlisting whatever scraps came back.
+    claimed_total = sum(r["header"] or 0 for r in search_rows)
+    if claimed_total >= 10 and found_total < claimed_total * 0.25:
+        w = (f"PARTIAL EXTRACTION: LinkedIn reported ~{claimed_total} results but only "
+             f"{found_total} job IDs were retrieved ({found_total * 100 // max(claimed_total, 1)}%). "
+             "The job-search markup has likely changed. Update the server "
+             "(uvx mcp-server-linkedin@latest) or report upstream: "
+             "https://github.com/stickerdaniel/linkedin-mcp-server/issues")
+        warnings.append(w)
+        log(f"WARNING: {w}")
+
     # ---- suspected dead session -----------------------------------------
     # An expired LinkedIn session does not error: it serves an empty, gated
     # results page, so every search returns 0 and the run looks like a quiet
@@ -754,10 +773,23 @@ def main():
     # notify, and above all do NOT advance last_run, or the blind window is
     # lost permanently.
     if found_total == 0 and len(search_rows) > 0:
-        msg = ("SUSPECTED DEAD SESSION: every search returned 0 results. "
-               "LinkedIn serves an empty page when logged out. last_run NOT advanced. "
-               "Re-login: stop the hub, run 'uvx mcp-server-linkedin@latest --login', "
-               "then restart start-linkedin-hub.bat")
+        # Distinguish the two causes, because the remedies are opposite.
+        # If the page reported "N results" but no IDs came back, we ARE logged
+        # in and LinkedIn's markup changed - the server's extractor needs
+        # updating and re-logging-in would achieve nothing.
+        claimed = sum(r["header"] or 0 for r in search_rows)
+        if claimed > 0:
+            msg = (f"EXTRACTOR BROKEN: pages reported ~{claimed} results but 0 job IDs "
+                   "were extracted. You are logged in; LinkedIn's job-search markup has "
+                   "changed and mcp-server-linkedin cannot parse it. Re-login will NOT "
+                   "help. Update the server (uvx mcp-server-linkedin@latest) or report "
+                   "upstream: https://github.com/stickerdaniel/linkedin-mcp-server/issues"
+                   " - last_run NOT advanced.")
+        else:
+            msg = ("SUSPECTED DEAD SESSION: every search returned 0 results and the page "
+                   "reported no result count. LinkedIn serves an empty page when logged "
+                   "out. last_run NOT advanced. Re-login: stop the hub, run "
+                   "'uvx mcp-server-linkedin@latest --login', then restart the hub.")
         log(f"FATAL: {msg}")
         result = {
             "run_utc": now_iso, "search_calls": mcp.search_calls,
