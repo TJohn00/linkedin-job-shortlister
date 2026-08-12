@@ -311,6 +311,50 @@ def parse_search_text(blob):
     return out
 
 
+def resolve_job_id(mcp, job, location, work_type=None):
+    """Recover a real job id for a card LinkedIn refused to link.
+
+    The 2026-08 layout only exposes a URL for the ONE auto-selected result.
+    So search again, narrowly enough that the wanted job IS that result:
+    "<title> <company>" typically returns a single hit, whose reference
+    carries /jobs/view/<id>/.
+
+    Costs one extra search_jobs call per job, so callers must budget it.
+    Returns the id, or None if nothing matched confidently.
+    """
+    q = f"{job['title']} {job['company']}".strip()
+    args = {
+        "keywords": q,
+        "location": location,
+        "date_posted": "past_24_hours",
+        "max_pages": 1,
+    }
+    if work_type:
+        args["work_type"] = work_type
+    try:
+        payload = mcp.call("search_jobs", args)
+    except Exception as e:
+        log(f"  [resolve] {job['title'][:40]!r}: {e}")
+        return None
+    mcp.search_calls += 1
+
+    want = job["title"].strip().lower()
+    for r in (payload.get("references", {}) or {}).get("search_results", []):
+        if r.get("kind") != "job":
+            continue
+        m = re.search(r"/jobs/view/(\d+)", r.get("url", "") or "")
+        if not m:
+            continue
+        got = (r.get("text") or "").strip().lower()
+        # Titles must agree. A generic query like "DevOps Engineer" can surface
+        # a different company's posting, and fetching the wrong body silently
+        # would be worse than not resolving at all.
+        if got and got != want and want not in got and got not in want:
+            continue
+        return m.group(1)
+    return None
+
+
 def synth_id(title, company):
     """Stable pseudo-id so dedup and seen_jobs work without a real job id."""
     import hashlib
@@ -874,6 +918,10 @@ def main():
                             "header": header, "got": len(retrieved)})
         for jid, j in retrieved.items():
             if jid not in all_jobs:
+                # Remember which search produced this, so a later id-resolution
+                # query can be scoped to the same location/work_type.
+                j["_loc"] = entry["location"]
+                j["_wt"] = entry.get("work_type")
                 all_jobs[jid] = j
 
     found_total = sum(r["got"] for r in search_rows)
@@ -982,6 +1030,38 @@ def main():
                 keep.append(c)
         to_detail = keep
 
+    # ---- recover ids for cards LinkedIn would not link ------------------
+    # Applied AFTER the freshness gate so no search call is spent on a stale
+    # job. Each resolution costs one search_jobs call, so it is budgeted.
+    unresolved = []
+    if text_only:
+        max_h_f = (fr.get("max_age_minutes", 30) / 60.0) if fr.get("enabled") else 1e9
+        fresh_txt = [c for c in text_only if c["age_h"] is None or c["age_h"] <= max_h_f]
+        for c in text_only:
+            if c not in fresh_txt:
+                stale.append({
+                    "id": c["id"], "title": c["title"], "company": c["company"],
+                    "age": age_label(c["age_h"]), "detail_spent": False,
+                    "url": "",
+                })
+
+        fresh_txt.sort(key=lambda x: x["age_h"] if x["age_h"] is not None else 999)
+        budget = lim.get("max_id_resolutions_per_run", 10)
+        if fresh_txt:
+            log(f"resolve: recovering ids for {min(len(fresh_txt), budget)} "
+                f"of {len(fresh_txt)} unlinked job(s)")
+        for c in fresh_txt[:budget]:
+            rid = resolve_job_id(mcp, c, c.get("_loc") or "", c.get("_wt"))
+            if not rid:
+                unresolved.append(c)
+                continue
+            if rid in seen:
+                continue          # already processed under its real id
+            c["id"] = rid
+            c["text_only"] = False
+            to_detail.append(c)
+        unresolved.extend(fresh_txt[budget:])
+
     to_detail.sort(key=lambda x: x["age_h"] if x["age_h"] is not None else 999)
 
     cap = lim["max_job_details_per_run"]
@@ -1060,29 +1140,30 @@ def main():
             "url": f"https://www.linkedin.com/jobs/view/{c['id']}/",
         })
 
-    # Text-only records: scored on title + company alone. Deliberately capped
-    # at 7 - without the body we cannot verify the real role, real location or
-    # years required, and those are exactly what this pipeline exists to check.
-    # A capped score keeps them out of the 8+ notification band.
-    for c in text_only:
-        surrogate = f"{c['title']} {c['company']}"
-        rs, _, _ = rule_score(c, surrogate, sc)
-        rs = min(rs, 7)
-        if c.get("early"):
-            rs = min(rs + 1, 7)
-        scored.append({
-            "id": c["id"], "title": c["title"], "company": c["company"],
-            "loc": c["loc"] or "-",
-            "applicants": "early applicant" if c.get("early") else "unknown",
-            "applicants_n": None, "applicants_capped": False,
-            "age": age_label(c["age_h"]),
-            "age_hours": round(c["age_h"], 2) if c["age_h"] is not None else None,
-            "score": int(round(rs)),
-            "fit": "TITLE ONLY - body unavailable (LinkedIn extractor broken; see run warnings).",
-            "gap": "Not verified: real role, real location and years required are unknown.",
-            "url": "https://www.linkedin.com/jobs/search/?keywords="
-                   + urllib.parse.quote(c["title"]),
-        })
+    # Text-only records are NOT shortlisted. Without a job id there is no body,
+    # so the real role, real location, years required and applicant count are
+    # all unverifiable - and a listing whose only link is a search URL is noise,
+    # not a lead. They are counted and reported as a warning so the scale of
+    # what LinkedIn is withholding stays visible.
+    # Set config.include_unretrievable = true to list them anyway.
+    if unresolved and cfg.get("include_unretrievable"):
+        for c in unresolved:
+            surrogate = f"{c['title']} {c['company']}"
+            rs, _, _ = rule_score(c, surrogate, sc)
+            rs = min(rs, 7)
+            scored.append({
+                "id": c["id"], "title": c["title"], "company": c["company"],
+                "loc": c["loc"] or "-",
+                "applicants": "early applicant" if c.get("early") else "unknown",
+                "applicants_n": None, "applicants_capped": False,
+                "age": age_label(c["age_h"]),
+                "age_hours": round(c["age_h"], 2) if c["age_h"] is not None else None,
+                "score": int(round(rs)),
+                "fit": "TITLE ONLY - body unavailable (LinkedIn extractor broken).",
+                "gap": "Not verified: real role, real location and years required are unknown.",
+                "url": "https://www.linkedin.com/jobs/search/?keywords="
+                       + urllib.parse.quote(c["title"]),
+            })
 
     # Title-rejected jobs are recorded, never detailed - they cost 0 calls.
     for c in prerejected:
@@ -1150,9 +1231,18 @@ def main():
             "detailed": mcp.detail_calls, "deferred": deferred,
             "excluded": len(excluded_out), "saturated": len(saturated),
             "stale": len(stale),
+            "unretrievable": 0 if cfg.get("include_unretrievable") else len(unresolved),
         },
         "jobs": scored,
     }
+    if unresolved and not cfg.get("include_unretrievable"):
+        warnings.append(
+            f"{len(unresolved)} job(s) had no job ID and could not be recovered by a "
+            "follow-up title search, so their bodies were never read and they are NOT "
+            "shortlisted. Usually a generic title that matched several postings. "
+            "See UPSTREAM-ISSUE.md; set include_unretrievable=true in config.json to "
+            "list them as title-only entries."
+        )
     if stub_ids:
         warnings.append(
             f"{len(stub_ids)} job(s) returned no description (page had not rendered). "

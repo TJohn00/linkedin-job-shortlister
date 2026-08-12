@@ -138,6 +138,7 @@ $counts = '**Counts** ' + $DASH +
           ' ' + $DOT + ' unique '   + (Val $c.unique 0) +
           ' ' + $DOT + ' new '      + (Val $c.new 0) +
           ' ' + $DOT + ' detailed ' + (Val $c.detailed 0) +
+          ' ' + $DOT + ' no-id '    + (Val $c.unretrievable 0) +
           ' ' + $DOT + ' stale '    + (Val $c.stale 0) +
           ' ' + $DOT + ' saturated '+ (Val $c.saturated 0) +
           ' ' + $DOT + ' deferred ' + (Val $c.deferred 0) +

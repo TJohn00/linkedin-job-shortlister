@@ -1,37 +1,41 @@
-{
-  "_comment": "EDIT THIS FILE FIRST. A boolean OR query beats a single keyword by a wide margin: measured on one run, plain 'devops' returned 9 jobs of which ZERO were DevOps roles (Oracle BI, SAP, Microsoft D365, Windows support), while the OR query below returned 29 of which nearly all were genuine matches. LinkedIn honours quoted phrases with OR and parentheses.",
-
-  "keywords": "(\"DevOps\" OR \"Site Reliability\" OR \"SRE\" OR \"Platform Engineer\" OR \"Cloud Engineer\" OR \"Cloud Infrastructure\" OR \"Infrastructure Engineer\" OR \"Build and Release\" OR \"DevSecOps\" OR \"CI/CD\")",
-
-  "_searches_comment": "Each entry is an independent search with its own last_run and its own page budget. Include a nationwide remote entry: a role listed as 'India (Remote)' with no city NEVER appears in a city search. Measured: of 11 remote-only results, just 1 also showed up in the city searches. Overlap is harmless - dedup is by job ID. Replace these locations with your own.",
-  "searches": [
-    { "location": "Mumbai, Maharashtra" },
-    { "location": "Pune, Maharashtra" },
-    { "location": "India", "work_type": "remote" }
-  ],
-
-  "_excluded_comment": "Case-insensitive substring match against the company name in SEARCH results, so these cost zero detail calls. Useful for job-board aggregators and reposters that clutter results. Substring: 'Hired' also catches 'Hired.com'.",
-  "excluded_companies": [
-    "Hired",
-    "Jobs AI",
-    "CodeRound AI"
-  ],
-
-  "limits": {
-    "max_pages_per_location": 4,
-    "max_job_details_per_run": 25,
-    "cutoff_slack_minutes": 20,
-    "cold_start_hours": 24,
-    "max_posted_age_days": 3,
-    "applicant_soft_ceiling": 20,
-    "notify_score_threshold": 8
-  },
-
-  "_notify_comment": "A toast means 'stop what you are doing and apply', so its bar is higher than the shortlist's: it requires ALL of score >= min_score, a CONFIRMED applicant count under max_applicants, and posted within max_age_minutes. Deliberately independent of scoring.freshness so widening that window later does not quietly loosen the alert bar. Anything that scores high but fails a condition still appears in the shortlist with the reason - suppression is never silent.",
-  "notify": {
-    "min_score": 8,
-    "max_applicants": 20,
-    "max_age_minutes": 30,
-    "require_known_applicants": true
-  }
+﻿{
+    "_comment":  "EDIT THIS FILE FIRST. A boolean OR query beats a single keyword by a wide margin: measured on one run, plain \u0027devops\u0027 returned 9 jobs of which ZERO were DevOps roles (Oracle BI, SAP, Microsoft D365, Windows support), while the OR query below returned 29 of which nearly all were genuine matches. LinkedIn honours quoted phrases with OR and parentheses.",
+    "keywords":  "(\"DevOps\" OR \"Site Reliability\" OR \"SRE\" OR \"Platform Engineer\" OR \"Cloud Engineer\" OR \"Cloud Infrastructure\" OR \"Infrastructure Engineer\" OR \"Build and Release\" OR \"DevSecOps\" OR \"CI/CD\")",
+    "_searches_comment":  "Each entry is an independent search with its own last_run and its own page budget. Include a nationwide remote entry: a role listed as \u0027India (Remote)\u0027 with no city NEVER appears in a city search. Measured: of 11 remote-only results, just 1 also showed up in the city searches. Overlap is harmless - dedup is by job ID. Replace these locations with your own.",
+    "searches":  [
+                     {
+                         "location":  "Mumbai, Maharashtra"
+                     },
+                     {
+                         "location":  "Pune, Maharashtra"
+                     },
+                     {
+                         "location":  "India",
+                         "work_type":  "remote"
+                     }
+                 ],
+    "_excluded_comment":  "Case-insensitive substring match against the company name in SEARCH results, so these cost zero detail calls. Useful for job-board aggregators and reposters that clutter results. Substring: \u0027Hired\u0027 also catches \u0027Hired.com\u0027.",
+    "excluded_companies":  [
+                               "Hired",
+                               "Jobs AI",
+                               "CodeRound AI"
+                           ],
+    "limits":  {
+                   "max_pages_per_location":  4,
+                   "max_job_details_per_run":  25,
+                   "cutoff_slack_minutes":  20,
+                   "cold_start_hours":  24,
+                   "max_posted_age_days":  3,
+                   "applicant_soft_ceiling":  20,
+                   "notify_score_threshold":  8,
+                   "_max_id_resolutions_comment":  "LinkedIn\u0027s 2026-08 layout only links the ONE auto-selected result, so other cards arrive without a job ID. Each recovery costs one extra search_jobs call (a narrow \u0027title + company\u0027 query that makes the wanted job the sole result). Applied only after the freshness and title filters, so in practice 0-3 per run.",
+                   "max_id_resolutions_per_run":  10
+               },
+    "_notify_comment":  "A toast means \u0027stop what you are doing and apply\u0027, so its bar is higher than the shortlist\u0027s: it requires ALL of score \u003e= min_score, a CONFIRMED applicant count under max_applicants, and posted within max_age_minutes. Deliberately independent of scoring.freshness so widening that window later does not quietly loosen the alert bar. Anything that scores high but fails a condition still appears in the shortlist with the reason - suppression is never silent.",
+    "notify":  {
+                   "min_score":  8,
+                   "max_applicants":  20,
+                   "max_age_minutes":  30,
+                   "require_known_applicants":  true
+               }
 }
