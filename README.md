@@ -358,7 +358,18 @@ shortlist's. `config.notify` requires **all** of:
 |---|---|
 | score | ≥ 8 |
 | applicant count, **confirmed** | < 20 |
-| posted | within 30 min |
+| posted | within 6 hours |
+
+> **Do not set the age window aggressively low.** It was 30 minutes at first,
+> which produced **zero notifications for a full day**. Measuring the ages of
+> 231 dropped jobs showed why: nothing arrives under an hour, and the bulk sits
+> at 3–6h. LinkedIn does not surface postings to search that fast, so a
+> 30-minute gate discarded ~95% of every run before scoring and nothing ever
+> reached the notifier.
+>
+> Filter competition by **applicant count**, not by the clock. A 5h-old posting
+> with 12 applicants is a genuinely cold lead; a 20-minute-old one with 90 is
+> not.
 
 `"Over 100"` never qualifies — a capped count is not a confirmed one. Nor does an
 unknown count.

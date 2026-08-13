@@ -155,9 +155,9 @@
                        "crowded_penalty":  -1
                    },
     "freshness":  {
-                      "_comment":  "Only score jobs posted within this window. WARNING: LinkedIn surfaces jobs unreliably - measured, two roles appeared a full DAY late because page-1 ordering reshuffled. Anything seen late is permanently invisible under a tight cap. Skipped jobs ARE listed in the shortlist so the loss is visible. 30 suits a 30-minute schedule and a hypercompetitive market; 90-120 is safer. Set enabled=false to score everything within max_posted_age_days.",
+                      "_comment":  "Only score jobs posted within this window. WIDENED 30 -\u003e 360 on 2026-08-13 after a day with zero notifications. Measured the ages of 231 dropped jobs: NOTHING arrived under an hour, and the bulk sat at 3-6h (~1h:6, ~2h:3, ~3h:19, ~4h:34, ~5h:32, ~6h:20). LinkedIn simply does not surface postings to search within 30 minutes, so a 30-minute gate discarded ~95% of every run before scoring and nothing ever reached the notifier. Competition is now filtered by APPLICANT COUNT rather than by the clock, which is the better signal anyway: a 5h-old posting with 12 applicants is a genuinely cold lead, while a 20-minute-old one with 90 is not.",
                       "enabled":  true,
-                      "max_age_minutes":  30
+                      "max_age_minutes":  360
                   },
     "saturation":  {
                        "_comment":  "Applicant VELOCITY, not raw count. 20+ applicants within the first hour means the pool is already saturated; the same 20 over 24h is a cold posting worth applying to. Dropped before the LLM call, so they cost no tokens, and listed separately rather than hidden.",

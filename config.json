@@ -35,7 +35,8 @@
     "notify":  {
                    "min_score":  8,
                    "max_applicants":  20,
-                   "max_age_minutes":  30,
+                   "max_age_minutes":  360,
                    "require_known_applicants":  true
-               }
+               },
+    "_notify_revised":  "2026-08-13 - max_age_minutes 30 -\u003e 360. The 30-minute bar was unreachable: LinkedIn does not surface postings to search that fast (measured over 231 jobs, the freshest was ~1h and the bulk 3-6h), so no job ever satisfied it and a full day passed with zero notifications. max_applicants stays at 20 - that is the cutoff that actually matters, and it filters competition on evidence rather than on a clock the data shows we cannot meet."
 }
