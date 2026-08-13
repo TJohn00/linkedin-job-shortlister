@@ -630,6 +630,55 @@ def body_location(text):
 # --------------------------------------------------------------------------
 # Rule scoring
 # --------------------------------------------------------------------------
+REMOTE_RE = re.compile(
+    r"\bremote\b|work from home|work from anywhere|\bwfh\b|fully distributed", re.I
+)
+ONSITE_RE = re.compile(r"\(on-?site\)|\bon-?site\b|\bhybrid\b", re.I)
+
+
+def location_ok(search_loc, body_loc, raw, lf):
+    """Is this job actually in a location worth applying to?
+
+    LinkedIn's own filter cannot be trusted: 'India' is the whole country, city
+    searches use an ~80km radius plus a 'more results' block, and the remote
+    filter returns On-site roles in other cities. So verify against the location
+    text we can see - the search card and the body - the same way every other
+    field in this pipeline is verified against the body rather than the listing.
+
+    Returns (ok, reason_if_rejected).
+    """
+    if not lf.get("enabled"):
+        return True, ""
+
+    parts = [p for p in (search_loc, body_loc) if p]
+    if not parts:
+        # Unverifiable. Reject rather than assume - assuming is exactly how
+        # Gurugram and Hyderabad roles reached the shortlist.
+        return False, "location could not be determined"
+
+    # The BODY is authoritative. Judging on card+body combined meant a card
+    # saying "Pune City" whose body said "Bengaluru" matched 'pune' and passed -
+    # the precise title/body mismatch this pipeline exists to catch.
+    effective = (body_loc or search_loc).strip()
+    eff_low = effective.lower()
+
+    # Remote may be stated on either, and wins regardless of the city named:
+    # a role listed under "Bengaluru (Remote)" is workable from Mumbai.
+    combined = " | ".join(parts).lower()
+    if lf.get("allow_remote") and REMOTE_RE.search(combined) and not ONSITE_RE.search(combined):
+        return True, ""
+
+    for r in lf.get("reject", []):
+        if r in eff_low:
+            return False, f"location '{effective}' is outside target areas"
+
+    for a in lf.get("allowed", []):
+        if a in eff_low:
+            return True, ""
+
+    return False, f"location '{effective}' not in allowed areas and not remote"
+
+
 def count_keyword_hits(body, cfg):
     """How many DISTINCT profile keywords appear in the body.
 
@@ -1111,7 +1160,9 @@ def main():
     scored = []
     saturated = []
     stub_ids = []
+    wrong_loc = []
     sat = sc.get("saturation", {})
+    loc_filter = cfg.get("location_filter", {})
     for c in to_detail:
         d = mcp.call("get_job_details", {"job_id": c["id"]})
         mcp.detail_calls += 1
@@ -1143,6 +1194,18 @@ def main():
             stale.append({
                 "id": c["id"], "title": c["title"], "company": c["company"],
                 "age": age_label(ah), "detail_spent": True,
+                "url": f"https://www.linkedin.com/jobs/view/{c['id']}/",
+            })
+            continue
+
+        # Location gate. Runs on the BODY location, which is the authoritative
+        # one - a card saying "Pune City" whose body says "Remote" or
+        # "Bengaluru" has been observed repeatedly.
+        ok_loc, loc_why = location_ok(c.get("loc", ""), bloc, raw, loc_filter)
+        if not ok_loc:
+            wrong_loc.append({
+                "id": c["id"], "title": c["title"], "company": c["company"],
+                "loc": (bloc or c.get("loc") or "unknown"), "reason": loc_why,
                 "url": f"https://www.linkedin.com/jobs/view/{c['id']}/",
             })
             continue
@@ -1283,6 +1346,7 @@ def main():
             "excluded": len(excluded_out), "saturated": len(saturated),
             "stale": len(stale),
             "unretrievable": 0 if cfg.get("include_unretrievable") else len(unresolved),
+            "wrong_location": len(wrong_loc),
         },
         "jobs": scored,
     }
@@ -1306,6 +1370,8 @@ def main():
         result["excluded"] = excluded_out
     if saturated:
         result["saturated"] = saturated
+    if wrong_loc:
+        result["wrong_location"] = wrong_loc
     if stale:
         result["stale"] = stale
         result["stale_window"] = fr.get("max_age_minutes", 30)
@@ -1332,6 +1398,9 @@ def main():
     # saturated at posting time; that verdict does not expire.
     if saturated:
         ps("state-commit.ps1", "-AddSeen", ",".join(s["id"] for s in saturated))
+    # Location does not change, so mark these seen and never re-fetch them.
+    if wrong_loc:
+        ps("state-commit.ps1", "-AddSeen", ",".join(w["id"] for w in wrong_loc))
 
     # Stale jobs: mark seen ONLY where we already spent a detail call, so we do
     # not re-fetch the same stale posting every 30 minutes. Ones rejected for

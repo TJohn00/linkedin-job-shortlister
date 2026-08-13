@@ -38,5 +38,20 @@
                    "max_age_minutes":  360,
                    "require_known_applicants":  true
                },
-    "_notify_revised":  "2026-08-13 - max_age_minutes 30 -\u003e 360. The 30-minute bar was unreachable: LinkedIn does not surface postings to search that fast (measured over 231 jobs, the freshest was ~1h and the bulk 3-6h), so no job ever satisfied it and a full day passed with zero notifications. max_applicants stays at 20 - that is the cutoff that actually matters, and it filters competition on evidence rather than on a clock the data shows we cannot meet."
+    "_notify_revised":  "2026-08-13 - max_age_minutes 30 -\u003e 360. The 30-minute bar was unreachable: LinkedIn does not surface postings to search that fast (measured over 231 jobs, the freshest was ~1h and the bulk 3-6h), so no job ever satisfied it and a full day passed with zero notifications. max_applicants stays at 20 - that is the cutoff that actually matters, and it filters competition on evidence rather than on a clock the data shows we cannot meet.",
+    "_location_filter_comment":  "VERIFY the location instead of trusting LinkedIn\u0027s filter. A country-level search means the whole country, city searches use an ~80km radius plus a \u0027more results related to your search\u0027 block, and the remote filter is not reliable - measured 2026-08-13, a country+remote search returned four other cities\u0027 roles all marked On-site. Case-insensitive substring match against the location on the search card and in the body; the BODY wins. REPLACE the city lists with your own.",
+    "location_filter":  {
+                            "enabled":  true,
+                            "allow_remote":  true,
+                            "allowed":  [
+                                            "your city",
+                                            "your second city",
+                                            "nearby suburb"
+                                        ],
+                            "_reject_note":  "Listed to make intent explicit and catch common cases fast; anything not in allowed and not remote is rejected anyway.",
+                            "reject":  [
+                                           "other city a",
+                                           "other city b"
+                                       ]
+                        }
 }

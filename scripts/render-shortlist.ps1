@@ -138,6 +138,7 @@ $counts = '**Counts** ' + $DASH +
           ' ' + $DOT + ' unique '   + (Val $c.unique 0) +
           ' ' + $DOT + ' new '      + (Val $c.new 0) +
           ' ' + $DOT + ' detailed ' + (Val $c.detailed 0) +
+          ' ' + $DOT + ' wrong-loc ' + (Val $c.wrong_location 0) +
           ' ' + $DOT + ' no-id '    + (Val $c.unretrievable 0) +
           ' ' + $DOT + ' stale '    + (Val $c.stale 0) +
           ' ' + $DOT + ' saturated '+ (Val $c.saturated 0) +
@@ -219,6 +220,19 @@ if ($r.stale -and @($r.stale).Count -gt 0) {
     W '|---|---|---|'
     foreach ($e in @($r.stale)) {
         W ('| ' + (Esc (Val $e.title)) + ' | ' + (Esc (Val $e.company)) + ' | ' + (Esc (Val $e.age)) + ' |')
+    }
+    W
+}
+
+if ($r.wrong_location -and @($r.wrong_location).Count -gt 0) {
+    W '## Rejected: wrong location'
+    W
+    W ('Body location verified against the allow-list. LinkedIn''s own filter lets these through ' + $DASH + ' "India" is the whole country and the remote filter returns On-site roles elsewhere.')
+    W
+    W '| Title | Company | Location | Why |'
+    W '|---|---|---|---|'
+    foreach ($e in @($r.wrong_location)) {
+        W ('| ' + (Esc (Val $e.title)) + ' | ' + (Esc (Val $e.company)) + ' | ' + (Esc (Val $e.loc)) + ' | ' + (Esc (Val $e.reason)) + ' |')
     }
     W
 }
