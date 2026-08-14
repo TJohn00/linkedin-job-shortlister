@@ -636,7 +636,7 @@ REMOTE_RE = re.compile(
 ONSITE_RE = re.compile(r"\(on-?site\)|\bon-?site\b|\bhybrid\b", re.I)
 
 
-def location_ok(search_loc, body_loc, raw, lf):
+def location_ok(search_loc, body_loc, raw, lf, strict=True):
     """Is this job actually in a location worth applying to?
 
     LinkedIn's own filter cannot be trusted: 'India' is the whole country, city
@@ -652,9 +652,13 @@ def location_ok(search_loc, body_loc, raw, lf):
 
     parts = [p for p in (search_loc, body_loc) if p]
     if not parts:
-        # Unverifiable. Reject rather than assume - assuming is exactly how
-        # Gurugram and Hyderabad roles reached the shortlist.
-        return False, "location could not be determined"
+        # Unverifiable. In STRICT mode reject rather than assume - assuming is
+        # exactly how Gurugram and Hyderabad roles reached the shortlist. In
+        # lenient mode (pre-model) let it through, because the model reads the
+        # body far better than the regex and often resolves it to "Remote".
+        if strict:
+            return False, "location could not be determined"
+        return True, ""
 
     # The BODY is authoritative. Judging on card+body combined meant a card
     # saying "Pune City" whose body said "Bengaluru" matched 'pune' and passed -
@@ -675,6 +679,13 @@ def location_ok(search_loc, body_loc, raw, lf):
     for a in lf.get("allowed", []):
         if a in eff_low:
             return True, ""
+
+    if not strict:
+        # Pre-model: only CONFIDENT rejects (an explicit reject-list city,
+        # handled above). Anything merely vague - "India", a region name - goes
+        # on to the model, which will state the real location, and the strict
+        # pass afterwards judges that.
+        return True, ""
 
     return False, f"location '{effective}' not in allowed areas and not remote"
 
@@ -1201,7 +1212,11 @@ def main():
         # Location gate. Runs on the BODY location, which is the authoritative
         # one - a card saying "Pune City" whose body says "Remote" or
         # "Bengaluru" has been observed repeatedly.
-        ok_loc, loc_why = location_ok(c.get("loc", ""), bloc, raw, loc_filter)
+        # Pass 1, LENIENT: drop only confident rejects, so a detail call is not
+        # wasted on a job that is obviously in the wrong city. Vague locations
+        # continue to the model, which resolves them properly; the strict pass
+        # after scoring is what actually enforces the rule.
+        ok_loc, loc_why = location_ok(c.get("loc", ""), bloc, raw, loc_filter, strict=False)
         if not ok_loc:
             wrong_loc.append({
                 "id": c["id"], "title": c["title"], "company": c["company"],
@@ -1310,6 +1325,26 @@ def main():
                         s["mismatch"] = v["mismatch"]
     else:
         log("llm: skipped (nothing to judge)" if not to_detail else "llm: disabled")
+
+    # Pass 2, STRICT: re-check location using whatever is now the best value.
+    # The model OVERWRITES s["loc"] with its own reading of the body, which is
+    # more accurate than the regex - and that happened AFTER the first gate, so
+    # a job the model correctly identified as "Bengaluru (On-site)" still
+    # reached the shortlist. Judge the final value.
+    if loc_filter.get("enabled"):
+        kept = []
+        for s in scored:
+            ok_loc, loc_why = location_ok("", s.get("loc", ""), "", loc_filter, strict=True)
+            if ok_loc:
+                kept.append(s)
+            else:
+                wrong_loc.append({
+                    "id": s["id"], "title": s["title"], "company": s["company"],
+                    "loc": s.get("loc") or "unknown", "reason": loc_why,
+                    "url": s.get("url", ""),
+                })
+                log(f"  [location] dropped {s['title'][:40]!r}: {loc_why}")
+        scored = kept
 
     # Anything the model did not cover keeps its rule score, labelled honestly.
     # Explain WHY a job has no model verdict rather than printing a bare
